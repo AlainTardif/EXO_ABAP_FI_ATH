@@ -4,6 +4,7 @@
 
 *&---------------------------------------------------------------------*
 *& Classe locale pour les événements ALV Grid
+*& Je définis une classe pour gérer les événements de la toolbar ALV
 *&---------------------------------------------------------------------*
 CLASS lcl_event_handler DEFINITION.
   PUBLIC SECTION.
@@ -18,12 +19,12 @@ CLASS lcl_event_handler IMPLEMENTATION.
   METHOD on_toolbar.
     DATA: ls_button TYPE stb_button.
 
-    " Ajouter un séparateur
+    " J'ajoute un séparateur avant mon bouton personnalisé
     CLEAR ls_button.
-    ls_button-butn_type = 3. " Séparateur
+    ls_button-butn_type = 3.
     APPEND ls_button TO e_object->mt_toolbar.
 
-    " Ajouter le bouton Export
+    " J'ajoute le bouton Export dans la toolbar
     CLEAR ls_button.
     ls_button-function  = 'EXPORT'.
     ls_button-icon      = icon_export.
@@ -33,29 +34,36 @@ CLASS lcl_event_handler IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD on_user_command.
+    " Je gère le clic sur le bouton Export
     CASE e_ucomm.
       WHEN 'EXPORT'.
         PERFORM export_to_csv.
     ENDCASE.
   ENDMETHOD.
 ENDCLASS.
+
 *&---------------------------------------------------------------------*
 *& Form INIT_DEFAULT_VALUES
+*& J'initialise les valeurs par défaut de l'écran de sélection
 *&---------------------------------------------------------------------*
 FORM init_default_values.
+  " Je récupère l'année en cours pour la date par défaut
   gv_gjahr = sy-datum(4).
 ENDFORM.
 
 *&---------------------------------------------------------------------*
 *& Form GET_DATA
+*& Je récupère les données des tables BKPF et BSEG
 *&---------------------------------------------------------------------*
 FORM get_data.
   DATA: lv_gjahr             TYPE gjahr,
         lt_ebeln_with_client TYPE STANDARD TABLE OF ty_bkpf.
 
+  " J'extrais l'exercice de la date de sélection
   lv_gjahr = p_bldat(4).
 
-  " 1. Sélection des entêtes BKPF
+  " 1. Je sélectionne les entêtes BKPF avec les critères de sélection
+  "    Je ne garde que les pièces référençant une facture (VBRK) ou une pièce FI (BKPF)
   SELECT bukrs, belnr, gjahr, bldat, awtyp, awkey, waers, usnam
     FROM bkpf
     INTO TABLE @gt_bkpf
@@ -70,7 +78,7 @@ FORM get_data.
     RETURN.
   ENDIF.
 
-  " 2. Sélection des postes BSEG
+  " 2. Je sélectionne les postes BSEG des pièces récupérées
   SELECT bukrs, belnr, gjahr, buzei, bschl, koart, wrbtr
     FROM bseg
     INTO TABLE @gt_bseg
@@ -79,18 +87,21 @@ FORM get_data.
       AND belnr = @gt_bkpf-belnr
       AND gjahr = @gt_bkpf-gjahr.
 
-  " 3. Filtrer les pièces avec poste client
+  " 3. Je filtre les pièces ayant au moins un poste client (KOART = 'D')
+  "    J'utilise TRANSPORTING NO FIELDS car je veux juste vérifier l'existence
   LOOP AT gt_bkpf INTO DATA(ls_bkpf).
     LOOP AT gt_bseg TRANSPORTING NO FIELDS
       WHERE bukrs = ls_bkpf-bukrs
         AND belnr = ls_bkpf-belnr
         AND gjahr = ls_bkpf-gjahr
         AND koart = 'D'.
+      " Je garde cette pièce car elle a un poste client
       APPEND ls_bkpf TO lt_ebeln_with_client.
       EXIT.
     ENDLOOP.
   ENDLOOP.
 
+  " Je remplace la table par les pièces filtrées
   gt_bkpf = lt_ebeln_with_client.
 
   IF gt_bkpf IS INITIAL.
@@ -98,25 +109,29 @@ FORM get_data.
     RETURN.
   ENDIF.
 
+  " 4. Je récupère les données des pièces de référence
   PERFORM get_reference_data.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
 *& Form GET_REFERENCE_DATA
+*& Je récupère les données des pièces de référence (VBRK ou BKPF)
 *&---------------------------------------------------------------------*
 FORM get_reference_data.
   DATA: lt_vbeln    TYPE STANDARD TABLE OF vbeln_vf,
         lt_ref_keys TYPE STANDARD TABLE OF ty_bkpf,
         ls_ref_key  TYPE ty_bkpf.
 
-  " Collecter les références factures (VBRK)
+  " Je collecte les numéros de factures (VBRK) à récupérer
   LOOP AT gt_bkpf INTO DATA(ls_bkpf) WHERE awtyp = 'VBRK'.
     APPEND ls_bkpf-awkey(10) TO lt_vbeln.
   ENDLOOP.
 
+  " J'élimine les doublons pour optimiser le SELECT
   SORT lt_vbeln.
   DELETE ADJACENT DUPLICATES FROM lt_vbeln.
 
+  " Je récupère les créateurs des factures depuis VBRK
   IF lt_vbeln IS NOT INITIAL.
     SELECT vbeln, ernam
       FROM vbrk
@@ -125,17 +140,21 @@ FORM get_reference_data.
       WHERE vbeln = @lt_vbeln-table_line.
   ENDIF.
 
-  " Collecter les références pièces FI (BKPF)
+  " Je collecte les clés des pièces FI de référence
+  " AWKEY = BELNR(10) + BUKRS(4) + GJAHR(4) pour AWTYP = 'BKPF'
   LOOP AT gt_bkpf INTO ls_bkpf WHERE awtyp = 'BKPF'.
+    " Je découpe AWKEY pour extraire les composants de la clé
     ls_ref_key = VALUE #( bukrs = ls_bkpf-awkey+10(4)
                           belnr = ls_bkpf-awkey(10)
                           gjahr = ls_bkpf-awkey+14(4) ).
     APPEND ls_ref_key TO lt_ref_keys.
   ENDLOOP.
 
+  " J'élimine les doublons
   SORT lt_ref_keys BY bukrs belnr gjahr.
   DELETE ADJACENT DUPLICATES FROM lt_ref_keys COMPARING bukrs belnr gjahr.
 
+  " Je récupère les données des pièces FI de référence
   IF lt_ref_keys IS NOT INITIAL.
     SELECT bukrs, belnr, gjahr, bldat, awtyp, awkey, waers, usnam
       FROM bkpf
@@ -149,17 +168,20 @@ ENDFORM.
 
 *&---------------------------------------------------------------------*
 *& Form PROCESS_DATA
+*& Je construis la table de sortie pour l'ALV
 *&---------------------------------------------------------------------*
 FORM process_data.
   CLEAR gt_output.
 
+  " Je parcours les entêtes BKPF
   LOOP AT gt_bkpf INTO DATA(ls_bkpf).
+    " Je crée une ligne de sortie pour chaque poste de la pièce
     LOOP AT gt_bseg INTO DATA(ls_bseg)
       WHERE bukrs = ls_bkpf-bukrs
         AND belnr = ls_bkpf-belnr
         AND gjahr = ls_bkpf-gjahr.
 
-      " Construction directe avec VALUE #
+      " Je construis la ligne avec VALUE # (syntaxe moderne)
       DATA(ls_output) = VALUE ty_output(
         bukrs = ls_bkpf-bukrs
         belnr = ls_bkpf-belnr
@@ -172,23 +194,25 @@ FORM process_data.
         koart = ls_bseg-koart
         wrbtr = ls_bseg-wrbtr ).
 
-      " Traitement référence selon AWTYP
+      " Je traite la référence selon le type AWTYP
       CASE ls_bkpf-awtyp.
         WHEN 'BKPF'.
+          " Référence FI : je découpe AWKEY pour extraire les infos
           ls_output-ref_belnr = ls_bkpf-awkey(10).
           ls_output-ref_bukrs = ls_bkpf-awkey+10(4).
           ls_output-ref_gjahr = ls_bkpf-awkey+14(4).
-          " Récupérer créateur avec OPTIONAL
+          " Je récupère le créateur avec OPTIONAL pour éviter le dump si non trouvé
           ls_output-ref_ernam = VALUE #( gt_bkpf_ref[ bukrs = ls_output-ref_bukrs
                                                        belnr = ls_output-ref_belnr
                                                        gjahr = ls_output-ref_gjahr ]-usnam OPTIONAL ).
         WHEN 'VBRK'.
+          " Référence facture : je récupère le numéro et le créateur
           ls_output-ref_vbeln = ls_bkpf-awkey(10).
-          " Récupérer créateur avec OPTIONAL
           ls_output-ref_ernam = VALUE #( gt_vbrk[ vbeln = ls_output-ref_vbeln ]-ernam OPTIONAL ).
       ENDCASE.
 
-      " Couleurs
+      " Je définis les couleurs des colonnes
+      " Bleu (col = 1) pour l'entête, Orange (col = 7) pour les références et postes
       ls_output-color = VALUE lvc_t_scol(
         ( fname = 'BUKRS' color = VALUE #( col = 1 int = 1 ) )
         ( fname = 'BELNR' color = VALUE #( col = 1 int = 1 ) )
@@ -213,6 +237,7 @@ ENDFORM.
 
 *&---------------------------------------------------------------------*
 *& Form DISPLAY_ALV
+*& J'affiche l'ALV Grid via l'écran 100
 *&---------------------------------------------------------------------*
 FORM display_alv.
   IF gt_output IS INITIAL.
@@ -220,59 +245,71 @@ FORM display_alv.
     RETURN.
   ENDIF.
 
+  " J'appelle l'écran Dynpro 100 qui contient le container ALV
   CALL SCREEN 100.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
 *& Module PBO_0100
+*& Je prépare l'affichage de l'écran 100 (Process Before Output)
 *&---------------------------------------------------------------------*
 MODULE pbo_0100 OUTPUT.
+  " Je définis le status et le titre de l'écran
   SET PF-STATUS 'STATUS_100'.
   SET TITLEBAR 'TITLE_100'.
 
+  " Je crée le container et la grille ALV une seule fois
   IF go_container IS INITIAL.
+    " Je crée le container lié au Custom Control 'CC_ALV' du Dynpro
     CREATE OBJECT go_container
       EXPORTING
         container_name = 'CC_ALV'.
 
+    " Je crée la grille ALV dans le container
     CREATE OBJECT go_grid
       EXPORTING
         i_parent = go_container.
 
+    " J'affiche les données dans la grille
     PERFORM display_grid.
   ENDIF.
 ENDMODULE.
 
 *&---------------------------------------------------------------------*
 *& Module PAI_0100
+*& Je gère les actions utilisateur sur l'écran 100 (Process After Input)
 *&---------------------------------------------------------------------*
 MODULE pai_0100 INPUT.
+  " Je récupère le code fonction déclenché
   gv_ok_code = sy-ucomm.
   CLEAR sy-ucomm.
 
+  " Je traite l'action utilisateur
   CASE gv_ok_code.
-    WHEN 'BACK'.
+    WHEN 'BACK' OR 'EXIT' OR 'CANCEL'.
+      " Je quitte l'écran et retourne à l'écran précédent
       LEAVE TO SCREEN 0.
     WHEN 'EXPORT'.
+      " Je déclenche l'export CSV
       PERFORM export_to_csv.
   ENDCASE.
 ENDMODULE.
 
 *&---------------------------------------------------------------------*
 *& Form DISPLAY_GRID
+*& Je configure et affiche la grille ALV avec le fieldcatalog
 *&---------------------------------------------------------------------*
 FORM display_grid.
   DATA: lt_fieldcat TYPE lvc_t_fcat,
         ls_fieldcat TYPE lvc_s_fcat,
-        ls_layout   TYPE lvc_s_layo,
-        lt_exclude  TYPE ui_functions.
+        ls_layout   TYPE lvc_s_layo.
 
-  " Layout avec couleurs
-  ls_layout-zebra      = abap_true.
-  ls_layout-cwidth_opt = abap_true.
-  ls_layout-ctab_fname = 'COLOR'.
+  " Je configure le layout de l'ALV
+  ls_layout-zebra      = abap_true.  " Alternance de couleurs lignes
+  ls_layout-cwidth_opt = abap_true.  " Largeur optimale des colonnes
+  ls_layout-ctab_fname = 'COLOR'.    " Champ contenant les couleurs
 
-  " Construire le fieldcatalog manuellement
+  " Je construis le fieldcatalog manuellement car ty_output n'est pas DDIC
   CLEAR ls_fieldcat.
   ls_fieldcat-fieldname = 'BUKRS'.
   ls_fieldcat-scrtext_s = 'Co.'.
@@ -363,16 +400,17 @@ FORM display_grid.
   ls_fieldcat-coltext   = 'Amount'.
   APPEND ls_fieldcat TO lt_fieldcat.
 
+  " Je masque la colonne COLOR (technique)
   CLEAR ls_fieldcat.
   ls_fieldcat-fieldname = 'COLOR'.
   ls_fieldcat-tech      = abap_true.
   APPEND ls_fieldcat TO lt_fieldcat.
 
-  " Enregistrer la classe d'événements pour la toolbar
+  " J'enregistre les handlers pour les événements toolbar et user_command
   SET HANDLER lcl_event_handler=>on_toolbar FOR go_grid.
   SET HANDLER lcl_event_handler=>on_user_command FOR go_grid.
 
-  " Afficher la grille
+  " J'affiche la grille avec les données et le fieldcatalog
   go_grid->set_table_for_first_display(
     EXPORTING
       is_layout       = ls_layout
@@ -381,11 +419,12 @@ FORM display_grid.
       it_fieldcatalog = lt_fieldcat ).
 ENDFORM.
 
-
 *&---------------------------------------------------------------------*
 *& Form EXPORT_TO_CSV
+*& J'exporte les données de l'ALV vers un fichier CSV
 *&---------------------------------------------------------------------*
 FORM export_to_csv.
+  " Je vérifie qu'un fichier a été spécifié
   IF p_file IS INITIAL.
     MESSAGE 'Veuillez spécifier un fichier' TYPE 'I'.
     RETURN.
@@ -393,10 +432,12 @@ FORM export_to_csv.
 
   CHECK gt_output IS NOT INITIAL.
 
+  " Je construis le fichier CSV avec l'en-tête
   DATA(lt_csv) = VALUE string_table(
     ( |Company Code;Document Number;Fiscal Year;Document Date;Ref.;| &&
       |CoC;Document;Fis.;Billing Doc.;User name;It.;P.;A;Curr.;Amount| ) ).
 
+  " J'ajoute chaque ligne de données avec les string templates
   LOOP AT gt_output INTO DATA(ls).
     APPEND |{ ls-bukrs };{ ls-belnr };{ ls-gjahr };{ ls-bldat };{ ls-awtyp };| &&
            |{ ls-ref_bukrs };{ ls-ref_belnr };{ ls-ref_gjahr };{ ls-ref_vbeln };| &&
@@ -404,11 +445,13 @@ FORM export_to_csv.
            |{ ls-wrbtr }| TO lt_csv.
   ENDLOOP.
 
+  " Je télécharge le fichier sur le poste client
   cl_gui_frontend_services=>gui_download(
     EXPORTING filename = p_file filetype = 'ASC'
     CHANGING  data_tab = lt_csv
     EXCEPTIONS OTHERS   = 1 ).
 
+  " J'affiche le message de résultat
   IF sy-subrc = 0.
     MESSAGE 'Fichier exporté avec succès' TYPE 'S'.
   ELSE.
