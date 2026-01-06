@@ -1,5 +1,5 @@
 *&---------------------------------------------------------------------*
-*& Include Z_FI_ATH_F01 - Sous-routines
+*& Include Z_FI_ATH_F01 - Sous-routines (syntaxe moderne)
 *&---------------------------------------------------------------------*
 
 *&---------------------------------------------------------------------*
@@ -13,14 +13,13 @@ ENDFORM.
 *& Form GET_DATA
 *&---------------------------------------------------------------------*
 FORM get_data.
-  DATA: lt_ebeln_with_client TYPE STANDARD TABLE OF ty_bkpf,
-        lv_gjahr             TYPE gjahr.
+  DATA: lv_gjahr             TYPE gjahr,
+        lt_ebeln_with_client TYPE STANDARD TABLE OF ty_bkpf.
 
-  " Extraire l'exercice de la date
   lv_gjahr = p_bldat(4).
 
   " 1. Sélection des entêtes BKPF
-  SELECT bukrs belnr gjahr bldat awtyp awkey waers usnam
+  SELECT bukrs, belnr, gjahr, bldat, awtyp, awkey, waers, usnam
     FROM bkpf
     INTO TABLE @gt_bkpf
     WHERE bukrs = @p_bukrs
@@ -35,7 +34,7 @@ FORM get_data.
   ENDIF.
 
   " 2. Sélection des postes BSEG
-  SELECT bukrs belnr gjahr buzei bschl koart wrbtr
+  SELECT bukrs, belnr, gjahr, buzei, bschl, koart, wrbtr
     FROM bseg
     INTO TABLE @gt_bseg
     FOR ALL ENTRIES IN @gt_bkpf
@@ -43,9 +42,9 @@ FORM get_data.
       AND belnr = @gt_bkpf-belnr
       AND gjahr = @gt_bkpf-gjahr.
 
-  " 3. Filtrer les pièces ayant au moins un poste client (KOART = 'D')
+  " 3. Filtrer les pièces avec poste client
   LOOP AT gt_bkpf INTO DATA(ls_bkpf).
-    LOOP AT gt_bseg INTO DATA(ls_bseg)
+    LOOP AT gt_bseg TRANSPORTING NO FIELDS
       WHERE bukrs = ls_bkpf-bukrs
         AND belnr = ls_bkpf-belnr
         AND gjahr = ls_bkpf-gjahr
@@ -55,7 +54,6 @@ FORM get_data.
     ENDLOOP.
   ENDLOOP.
 
-  " Garder uniquement les pièces avec poste client
   gt_bkpf = lt_ebeln_with_client.
 
   IF gt_bkpf IS INITIAL.
@@ -63,7 +61,6 @@ FORM get_data.
     RETURN.
   ENDIF.
 
-  " 4. Récupérer les données des pièces de référence
   PERFORM get_reference_data.
 ENDFORM.
 
@@ -71,22 +68,20 @@ ENDFORM.
 *& Form GET_REFERENCE_DATA
 *&---------------------------------------------------------------------*
 FORM get_reference_data.
-  DATA: lt_vbeln TYPE STANDARD TABLE OF vbeln_vf,
+  DATA: lt_vbeln    TYPE STANDARD TABLE OF vbeln_vf,
         lt_ref_keys TYPE STANDARD TABLE OF ty_bkpf,
-        lv_ref_belnr TYPE belnr_d,
-        lv_ref_bukrs TYPE bukrs,
-        lv_ref_gjahr TYPE gjahr.
+        ls_ref_key  TYPE ty_bkpf.
 
   " Collecter les références factures (VBRK)
   LOOP AT gt_bkpf INTO DATA(ls_bkpf) WHERE awtyp = 'VBRK'.
-    APPEND ls_bkpf-awkey(10) TO lt_vbeln.
+    APPEND CONV vbeln_vf( ls_bkpf-awkey(10) ) TO lt_vbeln.
   ENDLOOP.
 
   SORT lt_vbeln.
   DELETE ADJACENT DUPLICATES FROM lt_vbeln.
 
   IF lt_vbeln IS NOT INITIAL.
-    SELECT vbeln ernam
+    SELECT vbeln, ernam
       FROM vbrk
       INTO TABLE @gt_vbrk
       FOR ALL ENTRIES IN @lt_vbeln
@@ -95,15 +90,9 @@ FORM get_reference_data.
 
   " Collecter les références pièces FI (BKPF)
   LOOP AT gt_bkpf INTO ls_bkpf WHERE awtyp = 'BKPF'.
-    " AWKEY = BELNR(10) + BUKRS(4) + GJAHR(4)
-    lv_ref_belnr = ls_bkpf-awkey(10).
-    lv_ref_bukrs = ls_bkpf-awkey+10(4).
-    lv_ref_gjahr = ls_bkpf-awkey+14(4).
-
-    DATA(ls_ref_key) = VALUE ty_bkpf(
-      bukrs = lv_ref_bukrs
-      belnr = lv_ref_belnr
-      gjahr = lv_ref_gjahr ).
+    ls_ref_key = VALUE #( bukrs = ls_bkpf-awkey+10(4)
+                          belnr = ls_bkpf-awkey(10)
+                          gjahr = ls_bkpf-awkey+14(4) ).
     APPEND ls_ref_key TO lt_ref_keys.
   ENDLOOP.
 
@@ -111,7 +100,7 @@ FORM get_reference_data.
   DELETE ADJACENT DUPLICATES FROM lt_ref_keys COMPARING bukrs belnr gjahr.
 
   IF lt_ref_keys IS NOT INITIAL.
-    SELECT bukrs belnr gjahr bldat awtyp awkey waers usnam
+    SELECT bukrs, belnr, gjahr, bldat, awtyp, awkey, waers, usnam
       FROM bkpf
       INTO TABLE @gt_bkpf_ref
       FOR ALL ENTRIES IN @lt_ref_keys
@@ -125,65 +114,60 @@ ENDFORM.
 *& Form PROCESS_DATA
 *&---------------------------------------------------------------------*
 FORM process_data.
-  DATA: ls_output TYPE ty_output,
-        ls_color  TYPE lvc_s_scol,
-        lv_ref_belnr TYPE belnr_d,
-        lv_ref_bukrs TYPE bukrs,
-        lv_ref_gjahr TYPE gjahr.
-
   CLEAR gt_output.
 
-  " Parcourir les entêtes
   LOOP AT gt_bkpf INTO DATA(ls_bkpf).
-    " Créer une ligne par poste
     LOOP AT gt_bseg INTO DATA(ls_bseg)
       WHERE bukrs = ls_bkpf-bukrs
         AND belnr = ls_bkpf-belnr
         AND gjahr = ls_bkpf-gjahr.
 
-      CLEAR: ls_output.
-
-      " Données entête (colonnes bleues)
-      ls_output-bukrs = ls_bkpf-bukrs.
-      ls_output-belnr = ls_bkpf-belnr.
-      ls_output-gjahr = ls_bkpf-gjahr.
-      ls_output-bldat = ls_bkpf-bldat.
-      ls_output-awtyp = ls_bkpf-awtyp.
-      ls_output-waers = ls_bkpf-waers.
-
-      " Données poste
-      ls_output-buzei = ls_bseg-buzei.
-      ls_output-bschl = ls_bseg-bschl.
-      ls_output-koart = ls_bseg-koart.
-      ls_output-wrbtr = ls_bseg-wrbtr.
+      " Construction directe avec VALUE #
+      DATA(ls_output) = VALUE ty_output(
+        bukrs = ls_bkpf-bukrs
+        belnr = ls_bkpf-belnr
+        gjahr = ls_bkpf-gjahr
+        bldat = ls_bkpf-bldat
+        awtyp = ls_bkpf-awtyp
+        waers = ls_bkpf-waers
+        buzei = ls_bseg-buzei
+        bschl = ls_bseg-bschl
+        koart = ls_bseg-koart
+        wrbtr = ls_bseg-wrbtr ).
 
       " Traitement référence selon AWTYP
-      IF ls_bkpf-awtyp = 'BKPF'.
-        " Référence FI : AWKEY = BELNR(10) + BUKRS(4) + GJAHR(4)
-        ls_output-ref_belnr = ls_bkpf-awkey(10).
-        ls_output-ref_bukrs = ls_bkpf-awkey+10(4).
-        ls_output-ref_gjahr = ls_bkpf-awkey+14(4).
-        " Récupérer le créateur de la pièce de référence
-        READ TABLE gt_bkpf_ref INTO DATA(ls_bkpf_ref)
-          WITH KEY bukrs = ls_output-ref_bukrs
-                   belnr = ls_output-ref_belnr
-                   gjahr = ls_output-ref_gjahr.
-        IF sy-subrc = 0.
-          ls_output-ref_ernam = ls_bkpf_ref-usnam.
-        ENDIF.
-      ELSEIF ls_bkpf-awtyp = 'VBRK'.
-        " Référence facture
-        ls_output-ref_vbeln = ls_bkpf-awkey(10).
-        " Récupérer le créateur de la facture
-        READ TABLE gt_vbrk INTO DATA(ls_vbrk)
-          WITH KEY vbeln = ls_output-ref_vbeln.
-        IF sy-subrc = 0.
-          ls_output-ref_ernam = ls_vbrk-ernam.
-        ENDIF.
-      ENDIF.
+      CASE ls_bkpf-awtyp.
+        WHEN 'BKPF'.
+          ls_output-ref_belnr = ls_bkpf-awkey(10).
+          ls_output-ref_bukrs = ls_bkpf-awkey+10(4).
+          ls_output-ref_gjahr = ls_bkpf-awkey+14(4).
+          " Récupérer créateur avec OPTIONAL
+          ls_output-ref_ernam = VALUE #( gt_bkpf_ref[ bukrs = ls_output-ref_bukrs
+                                                       belnr = ls_output-ref_belnr
+                                                       gjahr = ls_output-ref_gjahr ]-usnam OPTIONAL ).
+        WHEN 'VBRK'.
+          ls_output-ref_vbeln = ls_bkpf-awkey(10).
+          " Récupérer créateur avec OPTIONAL
+          ls_output-ref_ernam = VALUE #( gt_vbrk[ vbeln = ls_output-ref_vbeln ]-ernam OPTIONAL ).
+      ENDCASE.
 
-      " Couleurs colonnes
-      PERFORM set_row_colors CHANGING ls_output-color.
+      " Couleurs
+      ls_output-color = VALUE lvc_t_scol(
+        ( fname = 'BUKRS' color = VALUE #( col = 1 int = 1 ) )
+        ( fname = 'BELNR' color = VALUE #( col = 1 int = 1 ) )
+        ( fname = 'GJAHR' color = VALUE #( col = 1 int = 1 ) )
+        ( fname = 'BLDAT' color = VALUE #( col = 1 int = 1 ) )
+        ( fname = 'AWTYP' color = VALUE #( col = 1 int = 1 ) )
+        ( fname = 'REF_BUKRS' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'REF_BELNR' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'REF_GJAHR' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'REF_VBELN' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'REF_ERNAM' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'BUZEI' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'BSCHL' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'KOART' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'WAERS' color = VALUE #( col = 7 int = 1 ) )
+        ( fname = 'WRBTR' color = VALUE #( col = 7 int = 1 ) ) ).
 
       APPEND ls_output TO gt_output.
     ENDLOOP.
@@ -191,50 +175,9 @@ FORM process_data.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Form SET_ROW_COLORS
-*&---------------------------------------------------------------------*
-FORM set_row_colors CHANGING ct_color TYPE lvc_t_scol.
-  DATA: ls_color TYPE lvc_s_scol.
-
-  CLEAR ct_color.
-
-  " Colonnes bleues (entête) - COL = 1
-  CLEAR ls_color.
-  ls_color-color-col = 1.
-  ls_color-color-int = 1.
-  ls_color-color-inv = 0.
-
-  ls_color-fname = 'BUKRS'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'BELNR'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'GJAHR'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'BLDAT'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'AWTYP'. APPEND ls_color TO ct_color.
-
-  " Colonnes oranges (référence et postes) - COL = 7
-  ls_color-color-col = 7.
-  ls_color-color-int = 1.
-
-  ls_color-fname = 'REF_BUKRS'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'REF_BELNR'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'REF_GJAHR'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'REF_VBELN'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'REF_ERNAM'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'BUZEI'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'BSCHL'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'KOART'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'WAERS'. APPEND ls_color TO ct_color.
-  ls_color-fname = 'WRBTR'. APPEND ls_color TO ct_color.
-ENDFORM.
-
-*&---------------------------------------------------------------------*
 *& Form DISPLAY_ALV
 *&---------------------------------------------------------------------*
 FORM display_alv.
-  DATA: lo_columns  TYPE REF TO cl_salv_columns_table,
-        lo_column   TYPE REF TO cl_salv_column,
-        lo_events   TYPE REF TO cl_salv_events_table,
-        lo_functions TYPE REF TO cl_salv_functions_list.
-
   IF gt_output IS INITIAL.
     MESSAGE 'Aucune donnée à afficher' TYPE 'S' DISPLAY LIKE 'W'.
     RETURN.
@@ -242,131 +185,45 @@ FORM display_alv.
 
   TRY.
       cl_salv_table=>factory(
-        IMPORTING
-          r_salv_table = go_alv
-        CHANGING
-          t_table      = gt_output ).
+        IMPORTING r_salv_table = go_alv
+        CHANGING  t_table      = gt_output ).
 
-      " Activer toutes les fonctions standard
-      lo_functions = go_alv->get_functions( ).
-      lo_functions->set_all( abap_true ).
+      go_alv->get_functions( )->set_all( abap_true ).
 
-      " Ajouter le bouton Export personnalisé
-      lo_functions->add_function(
-        name     = 'EXPORT'
-        icon     = '@49@'
-        text     = 'Export'
-        tooltip  = 'Exporter en CSV'
-        position = if_salv_c_function_position=>right_of_salv_functions ).
-
-      " Gérer les événements
-      lo_events = go_alv->get_event( ).
-      CREATE OBJECT go_event_handler.
-      SET HANDLER go_event_handler->on_user_command FOR lo_events.
-
-      " Colonnes
-      lo_columns = go_alv->get_columns( ).
+      DATA(lo_columns) = go_alv->get_columns( ).
       lo_columns->set_optimize( abap_true ).
       lo_columns->set_color_column( 'COLOR' ).
 
-      " Renommer les colonnes
       PERFORM set_column_texts USING lo_columns.
 
-      " Afficher
       go_alv->display( ).
 
-    CATCH cx_salv_msg cx_salv_not_found cx_salv_data_error cx_salv_existing.
+    CATCH cx_salv_msg cx_salv_not_found cx_salv_data_error.
       MESSAGE 'Erreur affichage ALV' TYPE 'E'.
   ENDTRY.
 ENDFORM.
-
 
 *&---------------------------------------------------------------------*
 *& Form SET_COLUMN_TEXTS
 *&---------------------------------------------------------------------*
 FORM set_column_texts USING io_columns TYPE REF TO cl_salv_columns_table.
-  DATA: lo_column TYPE REF TO cl_salv_column.
-
   TRY.
-      lo_column = io_columns->get_column( 'BUKRS' ).
-      lo_column->set_short_text( 'Co.' ).
-      lo_column->set_medium_text( 'Company Code' ).
-      lo_column->set_long_text( 'Company Code' ).
-
-      lo_column = io_columns->get_column( 'BELNR' ).
-      lo_column->set_short_text( 'Document' ).
-      lo_column->set_medium_text( 'Document Number' ).
-      lo_column->set_long_text( 'Document Number' ).
-
-      lo_column = io_columns->get_column( 'GJAHR' ).
-      lo_column->set_short_text( 'Fis.' ).
-      lo_column->set_medium_text( 'Fiscal Year' ).
-      lo_column->set_long_text( 'Fiscal Year' ).
-
-      lo_column = io_columns->get_column( 'BLDAT' ).
-      lo_column->set_short_text( 'Doc. Date' ).
-      lo_column->set_medium_text( 'Document Date' ).
-      lo_column->set_long_text( 'Document Date' ).
-
-      lo_column = io_columns->get_column( 'AWTYP' ).
-      lo_column->set_short_text( 'Ref.' ).
-      lo_column->set_medium_text( 'Ref. Transactn' ).
-      lo_column->set_long_text( 'Ref. Transaction' ).
-
-      lo_column = io_columns->get_column( 'REF_BUKRS' ).
-      lo_column->set_short_text( 'CoC' ).
-      lo_column->set_medium_text( 'Ref. Company' ).
-      lo_column->set_long_text( 'Reference Company Code' ).
-
-      lo_column = io_columns->get_column( 'REF_BELNR' ).
-      lo_column->set_short_text( 'Document' ).
-      lo_column->set_medium_text( 'Ref. Document' ).
-      lo_column->set_long_text( 'Reference Document Number' ).
-
-      lo_column = io_columns->get_column( 'REF_GJAHR' ).
-      lo_column->set_short_text( 'Fis.' ).
-      lo_column->set_medium_text( 'Ref. Fiscal Year' ).
-      lo_column->set_long_text( 'Reference Fiscal Year' ).
-
-      lo_column = io_columns->get_column( 'REF_VBELN' ).
-      lo_column->set_short_text( 'Billing' ).
-      lo_column->set_medium_text( 'Billing Doc.' ).
-      lo_column->set_long_text( 'Billing Document' ).
-
-      lo_column = io_columns->get_column( 'REF_ERNAM' ).
-      lo_column->set_short_text( 'User' ).
-      lo_column->set_medium_text( 'User name' ).
-      lo_column->set_long_text( 'User name' ).
-
-      lo_column = io_columns->get_column( 'BUZEI' ).
-      lo_column->set_short_text( 'It.' ).
-      lo_column->set_medium_text( 'Line item' ).
-      lo_column->set_long_text( 'Line item' ).
-
-      lo_column = io_columns->get_column( 'BSCHL' ).
-      lo_column->set_short_text( 'P.' ).
-      lo_column->set_medium_text( 'Posting key' ).
-      lo_column->set_long_text( 'Posting key' ).
-
-      lo_column = io_columns->get_column( 'KOART' ).
-      lo_column->set_short_text( 'A' ).
-      lo_column->set_medium_text( 'Account Type' ).
-      lo_column->set_long_text( 'Account Type' ).
-
-      lo_column = io_columns->get_column( 'WAERS' ).
-      lo_column->set_short_text( 'Curr.' ).
-      lo_column->set_medium_text( 'Currency' ).
-      lo_column->set_long_text( 'Currency' ).
-
-      lo_column = io_columns->get_column( 'WRBTR' ).
-      lo_column->set_short_text( 'Amount' ).
-      lo_column->set_medium_text( 'Amount' ).
-      lo_column->set_long_text( 'Amount' ).
-
-      " Cacher la colonne COLOR
-      lo_column = io_columns->get_column( 'COLOR' ).
-      lo_column->set_visible( abap_false ).
-
+      io_columns->get_column( 'BUKRS' )->set_short_text( 'Co.' ).
+      io_columns->get_column( 'BELNR' )->set_short_text( 'Document' ).
+      io_columns->get_column( 'GJAHR' )->set_short_text( 'Fis.' ).
+      io_columns->get_column( 'BLDAT' )->set_short_text( 'Doc. Date' ).
+      io_columns->get_column( 'AWTYP' )->set_short_text( 'Ref.' ).
+      io_columns->get_column( 'REF_BUKRS' )->set_short_text( 'CoC' ).
+      io_columns->get_column( 'REF_BELNR' )->set_short_text( 'Document' ).
+      io_columns->get_column( 'REF_GJAHR' )->set_short_text( 'Fis.' ).
+      io_columns->get_column( 'REF_VBELN' )->set_short_text( 'Billing' ).
+      io_columns->get_column( 'REF_ERNAM' )->set_short_text( 'User' ).
+      io_columns->get_column( 'BUZEI' )->set_short_text( 'It.' ).
+      io_columns->get_column( 'BSCHL' )->set_short_text( 'P.' ).
+      io_columns->get_column( 'KOART' )->set_short_text( 'A' ).
+      io_columns->get_column( 'WAERS' )->set_short_text( 'Curr.' ).
+      io_columns->get_column( 'WRBTR' )->set_short_text( 'Amount' ).
+      io_columns->get_column( 'COLOR' )->set_visible( abap_false ).
     CATCH cx_salv_not_found.
   ENDTRY.
 ENDFORM.
@@ -375,12 +232,32 @@ ENDFORM.
 *& Form EXPORT_TO_CSV
 *&---------------------------------------------------------------------*
 FORM export_to_csv.
-  DATA: lt_csv    TYPE STANDARD TABLE OF string,
-        lv_line   TYPE string,
-        lv_sep    TYPE c VALUE ';'.
+  IF p_file IS INITIAL.
+    MESSAGE 'Veuillez spécifier un fichier' TYPE 'I'.
+    RETURN.
+  ENDIF.
 
-  CHECK p_file IS NOT INITIAL.
   CHECK gt_output IS NOT INITIAL.
 
-  " En-tête CSV
-  lv_l
+  DATA(lt_csv) = VALUE string_table(
+    ( |Company Code;Document Number;Fiscal Year;Document Date;Ref.;| &&
+      |CoC;Document;Fis.;Billing Doc.;User name;It.;P.;A;Curr.;Amount| ) ).
+
+  LOOP AT gt_output INTO DATA(ls).
+    APPEND |{ ls-bukrs };{ ls-belnr };{ ls-gjahr };{ ls-bldat };{ ls-awtyp };| &&
+           |{ ls-ref_bukrs };{ ls-ref_belnr };{ ls-ref_gjahr };{ ls-ref_vbeln };| &&
+           |{ ls-ref_ernam };{ ls-buzei };{ ls-bschl };{ ls-koart };{ ls-waers };| &&
+           |{ ls-wrbtr }| TO lt_csv.
+  ENDLOOP.
+
+  cl_gui_frontend_services=>gui_download(
+    EXPORTING filename = p_file filetype = 'ASC'
+    CHANGING  data_tab = lt_csv
+    EXCEPTIONS OTHERS   = 1 ).
+
+  IF sy-subrc = 0.
+    MESSAGE 'Fichier exporté avec succès' TYPE 'S'.
+  ELSE.
+    MESSAGE 'Erreur export' TYPE 'E'.
+  ENDIF.
+ENDFORM.
