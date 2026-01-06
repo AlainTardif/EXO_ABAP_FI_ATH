@@ -198,9 +198,10 @@ FORM set_row_colors CHANGING ct_color TYPE lvc_t_scol.
 
   CLEAR ct_color.
 
-  " Colonnes bleues (entête)
-  ls_color-color-col = 1. " Bleu
-  ls_color-color-int = 0.
+  " Colonnes bleues (entête) - COL = 1
+  CLEAR ls_color.
+  ls_color-color-col = 1.
+  ls_color-color-int = 1.
   ls_color-color-inv = 0.
 
   ls_color-fname = 'BUKRS'. APPEND ls_color TO ct_color.
@@ -209,8 +210,10 @@ FORM set_row_colors CHANGING ct_color TYPE lvc_t_scol.
   ls_color-fname = 'BLDAT'. APPEND ls_color TO ct_color.
   ls_color-fname = 'AWTYP'. APPEND ls_color TO ct_color.
 
-  " Colonnes oranges/rouges (référence et postes)
-  ls_color-color-col = 7. " Orange
+  " Colonnes oranges (référence et postes) - COL = 7
+  ls_color-color-col = 7.
+  ls_color-color-int = 1.
+
   ls_color-fname = 'REF_BUKRS'. APPEND ls_color TO ct_color.
   ls_color-fname = 'REF_BELNR'. APPEND ls_color TO ct_color.
   ls_color-fname = 'REF_GJAHR'. APPEND ls_color TO ct_color.
@@ -227,9 +230,10 @@ ENDFORM.
 *& Form DISPLAY_ALV
 *&---------------------------------------------------------------------*
 FORM display_alv.
-  DATA: lo_columns TYPE REF TO cl_salv_columns_table,
-        lo_column  TYPE REF TO cl_salv_column,
-        lo_events  TYPE REF TO cl_salv_events_table.
+  DATA: lo_columns  TYPE REF TO cl_salv_columns_table,
+        lo_column   TYPE REF TO cl_salv_column,
+        lo_events   TYPE REF TO cl_salv_events_table,
+        lo_functions TYPE REF TO cl_salv_functions_list.
 
   IF gt_output IS INITIAL.
     MESSAGE 'Aucune donnée à afficher' TYPE 'S' DISPLAY LIKE 'W'.
@@ -243,6 +247,23 @@ FORM display_alv.
         CHANGING
           t_table      = gt_output ).
 
+      " Activer toutes les fonctions standard
+      lo_functions = go_alv->get_functions( ).
+      lo_functions->set_all( abap_true ).
+
+      " Ajouter le bouton Export personnalisé
+      lo_functions->add_function(
+        name     = 'EXPORT'
+        icon     = '@49@'
+        text     = 'Export'
+        tooltip  = 'Exporter en CSV'
+        position = if_salv_c_function_position=>right_of_salv_functions ).
+
+      " Gérer les événements
+      lo_events = go_alv->get_event( ).
+      CREATE OBJECT go_event_handler.
+      SET HANDLER go_event_handler->on_user_command FOR lo_events.
+
       " Colonnes
       lo_columns = go_alv->get_columns( ).
       lo_columns->set_optimize( abap_true ).
@@ -251,16 +272,14 @@ FORM display_alv.
       " Renommer les colonnes
       PERFORM set_column_texts USING lo_columns.
 
-      " Activer la toolbar et ajouter le bouton Export
-      go_alv->get_functions( )->set_all( abap_true ).
-
       " Afficher
       go_alv->display( ).
 
-    CATCH cx_salv_msg cx_salv_not_found.
+    CATCH cx_salv_msg cx_salv_not_found cx_salv_data_error cx_salv_existing.
       MESSAGE 'Erreur affichage ALV' TYPE 'E'.
   ENDTRY.
 ENDFORM.
+
 
 *&---------------------------------------------------------------------*
 *& Form SET_COLUMN_TEXTS

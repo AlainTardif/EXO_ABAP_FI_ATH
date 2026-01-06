@@ -14,8 +14,3 @@ START-OF-SELECTION.
   PERFORM get_data.
   PERFORM process_data.
   PERFORM display_alv.
-
-  " Export CSV si fichier spécifié
-  IF p_file IS NOT INITIAL.
-    PERFORM export_to_csv.
-  ENDIF.

@@ -65,3 +65,22 @@ DATA: gv_gjahr TYPE gjahr.
 
 " ALV
 DATA: go_alv TYPE REF TO cl_salv_table.
+
+*&---------------------------------------------------------------------*
+*& Classe locale pour gérer les événements ALV
+*&---------------------------------------------------------------------*
+CLASS lcl_event_handler DEFINITION.
+  PUBLIC SECTION.
+    METHODS: on_user_command FOR EVENT added_function OF cl_salv_events
+      IMPORTING e_salv_function.
+ENDCLASS.
+
+CLASS lcl_event_handler IMPLEMENTATION.
+  METHOD on_user_command.
+    IF e_salv_function = 'EXPORT'.
+      PERFORM export_to_csv.
+    ENDIF.
+  ENDMETHOD.
+ENDCLASS.
+
+DATA: go_event_handler TYPE REF TO lcl_event_handler.
