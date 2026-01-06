@@ -1,7 +1,47 @@
 *&---------------------------------------------------------------------*
 *& Include Z_FI_ATH_F01 - Sous-routines (syntaxe moderne)
 *&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*& Include Z_FI_ATH_F01 - Sous-routines
+*&---------------------------------------------------------------------*
 
+*&---------------------------------------------------------------------*
+*& Classe locale pour les événements ALV Grid
+*&---------------------------------------------------------------------*
+CLASS lcl_event_handler DEFINITION.
+  PUBLIC SECTION.
+    CLASS-METHODS:
+      on_toolbar FOR EVENT toolbar OF cl_gui_alv_grid
+        IMPORTING e_object e_interactive,
+      on_user_command FOR EVENT user_command OF cl_gui_alv_grid
+        IMPORTING e_ucomm.
+ENDCLASS.
+
+CLASS lcl_event_handler IMPLEMENTATION.
+  METHOD on_toolbar.
+    DATA: ls_button TYPE stb_button.
+
+    " Ajouter un séparateur
+    CLEAR ls_button.
+    ls_button-butn_type = 3. " Séparateur
+    APPEND ls_button TO e_object->mt_toolbar.
+
+    " Ajouter le bouton Export
+    CLEAR ls_button.
+    ls_button-function  = 'EXPORT'.
+    ls_button-icon      = icon_export.
+    ls_button-text      = 'Export'.
+    ls_button-quickinfo = 'Exporter en CSV'.
+    APPEND ls_button TO e_object->mt_toolbar.
+  ENDMETHOD.
+
+  METHOD on_user_command.
+    CASE e_ucomm.
+      WHEN 'EXPORT'.
+        PERFORM export_to_csv.
+    ENDCASE.
+  ENDMETHOD.
+ENDCLASS.
 *&---------------------------------------------------------------------*
 *& Form INIT_DEFAULT_VALUES
 *&---------------------------------------------------------------------*
@@ -74,7 +114,7 @@ FORM get_reference_data.
 
   " Collecter les références factures (VBRK)
   LOOP AT gt_bkpf INTO DATA(ls_bkpf) WHERE awtyp = 'VBRK'.
-    APPEND CONV vbeln_vf( ls_bkpf-awkey(10) ) TO lt_vbeln.
+    APPEND ls_bkpf-awkey(10) TO lt_vbeln.
   ENDLOOP.
 
   SORT lt_vbeln.
@@ -183,50 +223,167 @@ FORM display_alv.
     RETURN.
   ENDIF.
 
-  TRY.
-      cl_salv_table=>factory(
-        IMPORTING r_salv_table = go_alv
-        CHANGING  t_table      = gt_output ).
-
-      go_alv->get_functions( )->set_all( abap_true ).
-
-      DATA(lo_columns) = go_alv->get_columns( ).
-      lo_columns->set_optimize( abap_true ).
-      lo_columns->set_color_column( 'COLOR' ).
-
-      PERFORM set_column_texts USING lo_columns.
-
-      go_alv->display( ).
-
-    CATCH cx_salv_msg cx_salv_not_found cx_salv_data_error.
-      MESSAGE 'Erreur affichage ALV' TYPE 'E'.
-  ENDTRY.
+  CALL SCREEN 100.
 ENDFORM.
 
 *&---------------------------------------------------------------------*
-*& Form SET_COLUMN_TEXTS
+*& Module PBO_0100
 *&---------------------------------------------------------------------*
-FORM set_column_texts USING io_columns TYPE REF TO cl_salv_columns_table.
-  TRY.
-      io_columns->get_column( 'BUKRS' )->set_short_text( 'Co.' ).
-      io_columns->get_column( 'BELNR' )->set_short_text( 'Document' ).
-      io_columns->get_column( 'GJAHR' )->set_short_text( 'Fis.' ).
-      io_columns->get_column( 'BLDAT' )->set_short_text( 'Doc. Date' ).
-      io_columns->get_column( 'AWTYP' )->set_short_text( 'Ref.' ).
-      io_columns->get_column( 'REF_BUKRS' )->set_short_text( 'CoC' ).
-      io_columns->get_column( 'REF_BELNR' )->set_short_text( 'Document' ).
-      io_columns->get_column( 'REF_GJAHR' )->set_short_text( 'Fis.' ).
-      io_columns->get_column( 'REF_VBELN' )->set_short_text( 'Billing' ).
-      io_columns->get_column( 'REF_ERNAM' )->set_short_text( 'User' ).
-      io_columns->get_column( 'BUZEI' )->set_short_text( 'It.' ).
-      io_columns->get_column( 'BSCHL' )->set_short_text( 'P.' ).
-      io_columns->get_column( 'KOART' )->set_short_text( 'A' ).
-      io_columns->get_column( 'WAERS' )->set_short_text( 'Curr.' ).
-      io_columns->get_column( 'WRBTR' )->set_short_text( 'Amount' ).
-      io_columns->get_column( 'COLOR' )->set_visible( abap_false ).
-    CATCH cx_salv_not_found.
-  ENDTRY.
+MODULE pbo_0100 OUTPUT.
+  SET PF-STATUS 'STATUS_100'.
+  SET TITLEBAR 'TITLE_100'.
+
+  IF go_container IS INITIAL.
+    CREATE OBJECT go_container
+      EXPORTING
+        container_name = 'CC_ALV'.
+
+    CREATE OBJECT go_grid
+      EXPORTING
+        i_parent = go_container.
+
+    PERFORM display_grid.
+  ENDIF.
+ENDMODULE.
+
+*&---------------------------------------------------------------------*
+*& Module PAI_0100
+*&---------------------------------------------------------------------*
+MODULE pai_0100 INPUT.
+  gv_ok_code = sy-ucomm.
+  CLEAR sy-ucomm.
+
+  CASE gv_ok_code.
+    WHEN 'BACK'.
+      LEAVE TO SCREEN 0.
+    WHEN 'EXPORT'.
+      PERFORM export_to_csv.
+  ENDCASE.
+ENDMODULE.
+
+*&---------------------------------------------------------------------*
+*& Form DISPLAY_GRID
+*&---------------------------------------------------------------------*
+FORM display_grid.
+  DATA: lt_fieldcat TYPE lvc_t_fcat,
+        ls_fieldcat TYPE lvc_s_fcat,
+        ls_layout   TYPE lvc_s_layo,
+        lt_exclude  TYPE ui_functions.
+
+  " Layout avec couleurs
+  ls_layout-zebra      = abap_true.
+  ls_layout-cwidth_opt = abap_true.
+  ls_layout-ctab_fname = 'COLOR'.
+
+  " Construire le fieldcatalog manuellement
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'BUKRS'.
+  ls_fieldcat-scrtext_s = 'Co.'.
+  ls_fieldcat-coltext   = 'Company Code'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'BELNR'.
+  ls_fieldcat-scrtext_s = 'Document'.
+  ls_fieldcat-coltext   = 'Document Number'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'GJAHR'.
+  ls_fieldcat-scrtext_s = 'Fis.'.
+  ls_fieldcat-coltext   = 'Fiscal Year'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'BLDAT'.
+  ls_fieldcat-scrtext_s = 'Doc. Date'.
+  ls_fieldcat-coltext   = 'Document Date'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'AWTYP'.
+  ls_fieldcat-scrtext_s = 'Ref.'.
+  ls_fieldcat-coltext   = 'Ref. Transactn'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REF_BUKRS'.
+  ls_fieldcat-scrtext_s = 'CoC'.
+  ls_fieldcat-coltext   = 'Ref. Company'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REF_BELNR'.
+  ls_fieldcat-scrtext_s = 'Document'.
+  ls_fieldcat-coltext   = 'Ref. Document'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REF_GJAHR'.
+  ls_fieldcat-scrtext_s = 'Fis.'.
+  ls_fieldcat-coltext   = 'Ref. Fiscal Year'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REF_VBELN'.
+  ls_fieldcat-scrtext_s = 'Billing'.
+  ls_fieldcat-coltext   = 'Billing Doc.'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'REF_ERNAM'.
+  ls_fieldcat-scrtext_s = 'User'.
+  ls_fieldcat-coltext   = 'User name'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'BUZEI'.
+  ls_fieldcat-scrtext_s = 'It.'.
+  ls_fieldcat-coltext   = 'Line item'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'BSCHL'.
+  ls_fieldcat-scrtext_s = 'P.'.
+  ls_fieldcat-coltext   = 'Posting key'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'KOART'.
+  ls_fieldcat-scrtext_s = 'A'.
+  ls_fieldcat-coltext   = 'Account Type'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'WAERS'.
+  ls_fieldcat-scrtext_s = 'Curr.'.
+  ls_fieldcat-coltext   = 'Currency'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'WRBTR'.
+  ls_fieldcat-scrtext_s = 'Amount'.
+  ls_fieldcat-coltext   = 'Amount'.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  CLEAR ls_fieldcat.
+  ls_fieldcat-fieldname = 'COLOR'.
+  ls_fieldcat-tech      = abap_true.
+  APPEND ls_fieldcat TO lt_fieldcat.
+
+  " Enregistrer la classe d'événements pour la toolbar
+  SET HANDLER lcl_event_handler=>on_toolbar FOR go_grid.
+  SET HANDLER lcl_event_handler=>on_user_command FOR go_grid.
+
+  " Afficher la grille
+  go_grid->set_table_for_first_display(
+    EXPORTING
+      is_layout       = ls_layout
+    CHANGING
+      it_outtab       = gt_output
+      it_fieldcatalog = lt_fieldcat ).
 ENDFORM.
+
 
 *&---------------------------------------------------------------------*
 *& Form EXPORT_TO_CSV
